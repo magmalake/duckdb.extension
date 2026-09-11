@@ -1,12 +1,13 @@
 # soundlake
 
-**SQL does the relational work, Mojo computes the number SQL cannot express,
-and neither one leaves the process.**
 
 Acoustic monitoring: twelve sensors at four construction sites, two seconds of
 sound every hour. A relational table says where each sensor is and when each
 clip was taken. The clips are 16-bit PCM, as `BLOB`s in a column or as files on
 disk. Nothing in the tables knows anything about sound.
+
+SQL does the relational work, Mojo computes the number SQL cannot express,
+and neither one leaves the process.
 
 ## The query
 
