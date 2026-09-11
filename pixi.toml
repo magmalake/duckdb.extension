@@ -1,0 +1,25 @@
+[workspace]
+authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "duckdb-extension"
+version = "0.1.0"
+description = "A DuckDB extension that reads Iceberg tables through magmalake's Mojo read stack"
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+# The C++ toolchain for the extension. Mojo is not here: the bridge is its own
+# workspace under mojo/, because it needs the max-nightly channel and a pin
+# this build has no reason to inherit.
+cmake = ">=3.29,<4"
+ninja = ">=1.12,<2"
+ccache = ">=4,<5"
+make = "*"
+
+[tasks]
+# The bridge first: the extension dlopens it, so a build with only the C++
+# half fails at the first query instead of at build time.
+bridge = { cmd = "pixi run --manifest-path mojo/pixi.toml lib" }
+build = { cmd = "GEN=ninja make release", depends-on = ["bridge"] }
+debug = { cmd = "GEN=ninja make debug", depends-on = ["bridge"] }
+test = { cmd = "bash test/run_tests.sh", depends-on = ["build"] }
+clean = { cmd = "make clean" }

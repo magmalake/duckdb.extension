@@ -1,0 +1,26 @@
+[workspace]
+authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "mlake-bridge"
+version = "0.1.0"
+description = "The C ABI the DuckDB extension calls into: Iceberg scan planning and Arrow, in Mojo"
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+mojo = ">=1.0.0,<1.1.0a0"
+
+# The include list is the read stack: iceberg needs avro and parquet, parquet
+# needs arrow, thrift and the four codecs, and everything needs threads. They
+# are source paths rather than published tins because this repo sits beside
+# them and is developed against their working trees.
+#
+# `compat/stable` and not `compat/nightly`: this environment is Mojo 1.0.0,
+# where `Atomic` takes a `DType`.
+[tasks]
+lib = { cmd = "mkdir -p build && mojo build --emit shared-lib src/bridge.mojo -I src -I ../../iceberg.mojo/src -I ../../parquet.mojo/src -I ../../arrow-mlake.mojo/src -I ../../avro.mojo/src -I ../../thrift.mojo/src -I ../../zstd.mojo/src -I ../../snappy.mojo/src -I ../../lz4.mojo/src -I ../../brotli.mojo/src -I ../../hashes.mojo/src -I ../../roaring.mojo/src -I ../../objectstore.mojo/src -I ../../threads.mojo/src -I ../../threads.mojo/compat/stable -o build/libmlake_bridge$SHLIB_EXT" }
+
+[target.osx-arm64.activation.env]
+SHLIB_EXT = ".dylib"
+
+[target.linux-64.activation.env]
+SHLIB_EXT = ".so"

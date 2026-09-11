@@ -1,0 +1,95 @@
+# name: test/sql/mlake.test
+# description: read an Iceberg table written by PyIceberg
+# group: [mlake]
+
+# The fixture records absolute paths in its own metadata, so it is generated
+# rather than checked in and its location arrives by environment variable.
+# See test/make_fixture.py and test/run_tests.sh.
+require-env MLAKE_FIXTURE
+
+require mlake
+
+# ── the schema comes from the table's type, not from a batch ────────────────
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM mlake_scan('${MLAKE_FIXTURE}'));
+----
+id	BIGINT
+region	VARCHAR
+amount	DOUBLE
+ok	BOOLEAN
+ts	TIMESTAMP
+
+# ── every row exactly once ──────────────────────────────────────────────────
+# The fixture is three data files and one of them has room to divide, so this
+# asserts that the splits are disjoint and together cover the table. A splitter
+# that dropped a trailing row group, or handed the same byte range to two
+# tickets, fails here and nowhere else.
+#
+# `split_size` is 4 KiB rather than the default because the fixture is a few
+# tens of kilobytes: at 16 MiB nothing divides and one ticket per file passes
+# whether the splitter works or not.
+query III
+SELECT count(*), count(DISTINCT id), count(amount)
+FROM mlake_scan('${MLAKE_FIXTURE}', split_size => 4096);
+----
+607	607	605
+
+# The same rows however the work is divided. Splitting is a scheduling
+# decision, so a split size that changes the answer is a bug by definition.
+query I
+SELECT count(*) = (SELECT count(*) FROM mlake_scan('${MLAKE_FIXTURE}', split_size => 4096))
+FROM mlake_scan('${MLAKE_FIXTURE}');
+----
+true
+
+statement error
+SELECT * FROM mlake_scan('${MLAKE_FIXTURE}', split_size => -1);
+----
+split_size cannot be negative
+
+# Nulls survive. `amount` is the column with them, and a dropped validity
+# bitmap gives plausible numbers rather than an error.
+query R
+SELECT round(sum(amount), 2) FROM mlake_scan('${MLAKE_FIXTURE}');
+----
+621.5
+
+query II
+SELECT region, count(*) FROM mlake_scan('${MLAKE_FIXTURE}') GROUP BY region ORDER BY region;
+----
+apac	2
+eu	3
+split	600
+us	2
+
+# ── every column type the fixture covers ────────────────────────────────────
+query IIIII
+SELECT id, region, amount, ok, ts FROM mlake_scan('${MLAKE_FIXTURE}') WHERE id = 3;
+----
+3	eu	3.5	true	2023-11-16 12:00:00
+
+# A null reads as a null and not as a zero.
+query I
+SELECT amount IS NULL FROM mlake_scan('${MLAKE_FIXTURE}') WHERE id = 2;
+----
+true
+
+query I
+SELECT min(ts) FROM mlake_scan('${MLAKE_FIXTURE}');
+----
+2023-11-14 00:00:00
+
+# ── it behaves like any other table ─────────────────────────────────────────
+statement ok
+CREATE TABLE copied AS SELECT * FROM mlake_scan('${MLAKE_FIXTURE}');
+
+query I
+SELECT count(*) FROM copied JOIN mlake_scan('${MLAKE_FIXTURE}') USING (id);
+----
+607
+
+# ── failure is an error, not a crash or an empty result ─────────────────────
+statement error
+SELECT * FROM mlake_scan('/nonexistent/table');
+----
+mlake:

@@ -1,0 +1,6 @@
+build/
+.pixi/
+*.duckdb_extension
+mojo/build/
+mojo/.pixi/
+test/fixtures/
