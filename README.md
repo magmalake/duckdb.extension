@@ -99,6 +99,24 @@ extension is named `mlake` — `LOAD mlake`, `mlake_scan(…)` — which is what
 DuckDB user sees; the repository carries magmalake's `.extension` suffix the
 way its Mojo tins carry `.mojo`.
 
+**The two submodules move together.** `extension-ci-tools` publishes no tags,
+only a branch per DuckDB release, and its `main` runs ahead of all of them —
+so a pin taken from `main` builds a v1.4.x extension with tooling from a
+different line. Both are currently pinned to v1.4.1: `duckdb` at the tag,
+`extension-ci-tools` at the tip of its `v1.4.1` branch. To move DuckDB, move
+both in the same commit:
+
+```sh
+git -C duckdb fetch --tags && git -C duckdb checkout v1.4.5
+git -C extension-ci-tools fetch origin v1.4.5 && git -C extension-ci-tools checkout FETCH_HEAD
+git add duckdb extension-ci-tools    # records both as commit SHAs
+```
+
+`git submodule status` naming a pin `(heads/main)` is git describing the SHA
+by a local ref, not branch-tracking — there is no `branch =` in `.gitmodules`
+and a `--recursive` clone is deterministic either way. What the rule above
+fixes is *which* line it is deterministic about.
+
 The Mojo half lives in `mojo/` with its own `pixi.toml`, because it needs the
 `max-nightly` channel and a compiler pin this build has no reason to inherit.
 It builds `libmlake_bridge`, which the extension **dlopens** rather than links:
