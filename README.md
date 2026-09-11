@@ -14,15 +14,9 @@ GROUP BY region;
 No server, no socket, no IPC frames: the Mojo side hands DuckDB an Arrow
 `ArrowArrayStream` and DuckDB reads the buffers where they already are.
 
-## The seam
+## Passing the data
 
-[`flight.mojo`](https://github.com/magmalake/flight.mojo) already serves these
-tables over Arrow Flight, and a DuckDB client could use that. It would also
-encode every batch to IPC, push it through a socket and decode it again — to
-move data between two libraries in one address space. Flight is the right
-answer across a network and the wrong one across a function call.
-
-The Arrow C Data Interface is the answer for the second case. Both sides agree
+The Arrow C Data Interface is a good fit for this use case. Both sides agree
 on a struct of pointers, so what crosses is an address.
 
 ```
@@ -33,6 +27,14 @@ on a struct of pointers, so what crosses is an address.
   thread 1  ──ticket──▶  get_next() ──▶ batch      arrow-mlake   C Data Interface
   thread 2  ──ticket──▶  get_next() ──▶ batch
 ```
+
+Magmalake also provides 
+[`flight.mojo`](https://github.com/magmalake/flight.mojo) to serve
+tables over Arrow Flight, and a DuckDB client could use that. It would also
+encode every batch to IPC, push it through a socket and decode it again — to
+move data between two libraries in one address space. Flight is the right
+answer across a network and the wrong one across a function call.
+
 
 ## Units of work
 
