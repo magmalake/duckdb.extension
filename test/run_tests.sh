@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Generate the Iceberg fixture, then run the SQL tests against it.
+# Generate the fixtures, then run the SQL tests against them.
 #
-# The fixture needs PyIceberg and the extension needs the Mojo bridge; both are
+# Two fixtures: an Iceberg table written by PyIceberg, and a handful of
+# recordings whose features are known on paper. Both are generated rather than
+# checked in — the first records absolute paths in its own metadata, and the
+# second is 150 KB of sine waves that a script describes better than a blob in
+# git does.
+#
+# The fixtures need PyIceberg and the extension needs the Mojo bridge; both are
 # built by `pixi run test`, which calls this. Run it directly only if you have
 # already built both.
 set -euo pipefail
@@ -15,6 +21,11 @@ MLAKE_FIXTURE="$("$VENV/bin/python" test/make_fixture.py test/fixtures)"
 export MLAKE_FIXTURE
 echo "fixture: $MLAKE_FIXTURE"
 
+# Standard library only, so it runs under the same venv without adding to it.
+MLAKE_CLIPS="$("$VENV/bin/python" test/make_audio_fixture.py test/fixtures)"
+export MLAKE_CLIPS
+echo "clips: $MLAKE_CLIPS"
+
 # The bridge is dlopened, and the path baked in at build time points at the
 # working tree — but say so explicitly so a stale build cannot pick up a
 # different one.
@@ -24,6 +35,6 @@ export MLAKE_BRIDGE
 
 # The C ABI on its own first. A failure in the SQL tests could be either side
 # of the boundary; this one can only be the Mojo side.
-"$VENV/bin/python" test/bridge_check.py "$MLAKE_BRIDGE" "$MLAKE_FIXTURE"
+"$VENV/bin/python" test/bridge_check.py "$MLAKE_BRIDGE" "$MLAKE_FIXTURE" "$MLAKE_CLIPS"
 
 ./build/release/test/unittest "$@" 'test/sql/*'

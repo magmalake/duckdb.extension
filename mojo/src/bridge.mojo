@@ -1,8 +1,15 @@
-"""The C ABI a DuckDB extension calls to read an Iceberg table.
+"""The C ABI a DuckDB extension calls: read an Iceberg table, and measure a
+recording.
 
 Everything here is `@export`ed and takes or returns integers, because the
 other side of this boundary is C++ and the only types both languages agree on
 without ceremony are addresses and lengths.
+
+Two halves that share their plumbing. The Iceberg half hands DuckDB rows it
+read from somewhere else; the audio half hands DuckDB numbers it computed from
+rows DuckDB already had. Both plan into tickets, both return Arrow, and the
+audio half reuses the Iceberg half's plan handle unchanged, because a plan is a
+list of strings either way.
 
 ## Why the API is stateless
 
@@ -44,6 +51,10 @@ from iceberg.metadata import TableMetadata
 from iceberg.nested import empty_tree
 from iceberg.read import ScanOptions
 from iceberg.scan import TableScan
+
+from clips import features_batch, find_clips
+from dsp import peak_db, rms_db, spectral_centroid, zero_crossing_rate
+from wav import parse_wav
 
 comptime DEFAULT_SPLIT_SIZE = 16 * 1024 * 1024
 """Target bytes per ticket when the caller does not choose.
@@ -344,6 +355,193 @@ def mlake_read_split(
             )
             exported.append(export_c(arena, root))
 
+        _move_into(export_stream_of(exported^), out_ptr, 5, True)  # five words
+        return 1
+    except e:
+        return _fail(err, String(e))
+
+
+# ══ audio features ══════════════════════════════════════════════════════════
+#
+# The second thing this bridge does, and the one that is not about Iceberg at
+# all: compute a number from a recording. Two ways in, because the samples
+# arrive two ways.
+#
+# `mlake_audio_batch` is the scalar path. DuckDB evaluates a scalar function
+# over a whole vector at a time, so this takes a whole vector at a time — 2048
+# blobs in, 2048 doubles out, one call. Per-row entry points would put a
+# language boundary in the inner loop of every query.
+#
+# `mlake_audio_plan` / `_schema` / `_read` is the table path, over files on
+# disk rather than blobs in a column, and it reuses the plan handle and the
+# ticket machinery above unchanged: a plan is a list of strings either way.
+
+
+comptime FEATURE_RMS_DB = 0
+comptime FEATURE_PEAK_DB = 1
+comptime FEATURE_CENTROID_HZ = 2
+comptime FEATURE_ZCR = 3
+comptime FEATURE_DURATION_S = 4
+"""Which number to compute. Mirrored in src/include/mlake_bridge.hpp, which
+registers one SQL function per value; a mismatch between the two lists is the
+only way to get the wrong feature, so both name their constants."""
+
+
+def _feature_of(kind: Int, base: Int, length: Int) raises -> Float64:
+    var clip = parse_wav(base, length)
+    var samples = Span(clip.samples)
+    if kind == FEATURE_RMS_DB:
+        return rms_db(samples)
+    if kind == FEATURE_PEAK_DB:
+        return peak_db(samples)
+    if kind == FEATURE_CENTROID_HZ:
+        var c = spectral_centroid(samples, clip.sample_rate)
+        if c < 0.0:
+            raise Error("wav: no energy in this clip")
+        return c
+    if kind == FEATURE_ZCR:
+        return zero_crossing_rate(samples)
+    if kind == FEATURE_DURATION_S:
+        return clip.duration_s()
+    raise Error("mlake_audio: unknown feature ", kind)
+
+
+@export("mlake_audio_batch")
+def mlake_audio_batch(
+    kind: Int,
+    ptrs: Int,
+    lens: Int,
+    count: Int,
+    out_values: Int,
+    out_valid: Int,
+    err: Int,
+) abi("C") -> Int:
+    """Compute one feature for each of `count` clips; 1 on success.
+
+    `ptrs` and `lens` are two arrays of `count` words describing the blobs in
+    place — nothing is copied, because a DuckDB vector already holds the bytes
+    and copying 2048 of them to look at their headers would cost more than the
+    transform does.
+
+    A clip that cannot be decoded is **not** an error. It writes 0 to
+    `out_valid[i]` and the query sees a NULL, the same answer `try_cast` gives
+    for a string that is not a number. One bad file in a directory should cost
+    one row, not the query — and `mlake_audio_features` exists to say which row
+    and why. Only an unrecognised `kind`, which is a bug in the extension
+    rather than in the data, fails the whole call.
+    """
+    try:
+        var p = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=ptrs)
+        var l = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=lens)
+        var v = Pointer[Float64, MutUntrackedOrigin](
+            unsafe_from_address=out_values
+        )
+        var ok = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=out_valid
+        )
+        if kind < FEATURE_RMS_DB or kind > FEATURE_DURATION_S:
+            raise Error("mlake_audio: unknown feature ", kind)
+        for i in range(count):
+            try:
+                v[unsafe_offset=i] = _feature_of(
+                    kind, p[unsafe_offset=i], l[unsafe_offset=i]
+                )
+                ok[unsafe_offset=i] = 1
+            except:
+                v[unsafe_offset=i] = 0.0
+                ok[unsafe_offset=i] = 0
+        return 1
+    except e:
+        return _fail(err, String(e))
+
+
+comptime DEFAULT_BATCH_ROWS = 64
+"""Clips per ticket when the caller does not choose.
+
+The unit of work is a ticket, so this is also how finely the files divide
+between DuckDB's threads. Small enough that eight threads have something to do
+on a modest directory, large enough that the Arrow batch a ticket produces is
+worth building.
+"""
+
+
+@export("mlake_audio_plan")
+def mlake_audio_plan(
+    pattern_ptr: Int, pattern_len: Int, batch_rows: Int, err: Int
+) abi("C") -> Int:
+    """Expand a pattern into tickets of clips; returns a plan handle.
+
+    A ticket is its own newline-separated list of paths rather than a range
+    into a glob that would have to be expanded again to be read. Re-expanding
+    would mean every thread walking the directory, and worse, it would mean a
+    file created mid-query changing what the later tickets refer to.
+
+    Read the handle with `mlake_plan_count` / `mlake_plan_ticket` and free it
+    with `mlake_plan_free`, exactly like an Iceberg plan: both are a list of
+    strings and there is no reason for two of them.
+    """
+    try:
+        var paths = find_clips(_in(pattern_ptr, pattern_len))
+        var per = DEFAULT_BATCH_ROWS if batch_rows <= 0 else batch_rows
+        var tickets = (len(paths) + per - 1) // per
+        var words = unsafe_alloc[Int](1 + 2 * tickets)
+        words[unsafe_offset=0] = tickets
+        for t in range(tickets):
+            var ticket = String()
+            for i in range(t * per, min((t + 1) * per, len(paths))):
+                if i > t * per:
+                    ticket += String("\n")
+                ticket += paths[i]
+            words[unsafe_offset=1 + 2 * t] = _out(ticket)
+            words[unsafe_offset=2 + 2 * t] = ticket.byte_length()
+        return Int(words)
+    except e:
+        return _fail(err, String(e))
+
+
+@export("mlake_audio_schema")
+def mlake_audio_schema(out_ptr: Int, err: Int) abi("C") -> Int:
+    """Fill the caller's `ArrowSchema` with the feature table's schema.
+
+    Built from a zero-clip batch, so the schema is by construction the one the
+    rows will have rather than a second declaration of it that could drift.
+    """
+    try:
+        var built = features_batch(List[String]())
+        var exported = export_c(built[0], built[1])
+        var pair = exported.into_raw()
+        release_c_array(pair[0])  # only the schema was wanted
+        _move_into(pair[1], out_ptr, 9, False)  # nine words per ArrowSchema
+        return 1
+    except e:
+        return _fail(err, String(e))
+
+
+@export("mlake_audio_read")
+def mlake_audio_read(
+    ticket_ptr: Int, ticket_len: Int, out_ptr: Int, err: Int
+) abi("C") -> Int:
+    """Fill the caller's `ArrowArrayStream` with one ticket's rows; 1 on
+    success.
+
+    Decoding happens here and not at plan time, which is what makes the work
+    parallel: planning reads the directory, and every thread then opens its own
+    files and runs its own transforms with nothing shared between them.
+    """
+    try:
+        var ticket = _in(ticket_ptr, ticket_len)
+        var paths = List[String]()
+        var bytes = ticket.as_bytes()
+        var start = 0
+        for i in range(len(bytes) + 1):
+            if i == len(bytes) or bytes[i] == UInt8(10):  # "\n"
+                if i > start:
+                    paths.append(String(unsafe_from_utf8=bytes[start:i]))
+                start = i + 1
+
+        var built = features_batch(paths^)
+        var exported = List[ExportedArray]()
+        exported.append(export_c(built[0], built[1]))
         _move_into(export_stream_of(exported^), out_ptr, 5, True)  # five words
         return 1
     except e:

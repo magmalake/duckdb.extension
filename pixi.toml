@@ -22,4 +22,9 @@ bridge = { cmd = "pixi run --manifest-path mojo/pixi.toml lib" }
 build = { cmd = "GEN=ninja make release", depends-on = ["bridge"] }
 debug = { cmd = "GEN=ninja make debug", depends-on = ["bridge"] }
 test = { cmd = "bash test/run_tests.sh", depends-on = ["build"] }
+# The Mojo kernels on their own, against signals whose answers are closed
+# forms. No DuckDB, no fixture, no C++ — so a wrong number here is a wrong
+# number in the maths and nowhere else.
+test-mojo = { cmd = "pixi run --manifest-path mojo/pixi.toml test" }
+example = { cmd = "bash examples/soundlake/run.sh", depends-on = ["build"] }
 clean = { cmd = "make clean" }

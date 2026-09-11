@@ -1,0 +1,4 @@
+# 74 MB of synthetic recordings. `python generate.py` makes them again in
+# about twenty seconds, and makes exactly the same ones: the seed is fixed.
+data/
+__pycache__/

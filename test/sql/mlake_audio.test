@@ -1,0 +1,185 @@
+# name: test/sql/mlake_audio.test
+# description: audio features computed in Mojo, from blobs and from files
+# group: [mlake]
+
+# The clips are generated rather than checked in, and their location arrives by
+# environment variable. See test/make_audio_fixture.py and test/run_tests.sh.
+require-env MLAKE_CLIPS
+
+require mlake
+
+# ── the numbers are right, not merely stable ────────────────────────────────
+# Every expectation below is a closed form, not a previous run's output. A
+# half-scale sine has an RMS of 0.5/sqrt(2), which is -9.031 dBFS; its peak is
+# 0.5, which is -6.021; it crosses zero twice per cycle, so 2*1000/16000 of
+# adjacent sample pairs differ in sign; and all of its energy sits in one bin.
+
+statement ok
+CREATE TABLE clips AS
+SELECT regexp_extract(filename, '[^/]+$') AS name, content AS clip
+FROM read_blob('${MLAKE_CLIPS}/*.wav');
+
+query IRRRR
+SELECT name, round(mlake_rms_db(clip), 3), round(mlake_peak_db(clip), 3),
+       round(mlake_zcr(clip), 4), round(mlake_duration_s(clip), 3)
+FROM clips WHERE name = 'tone-1000.wav';
+----
+tone-1000.wav	-9.031	-6.021	0.1249	1.0
+
+# A quarter of the amplitude is 6 dB down, and four times the frequency is four
+# times the crossings. Both features move, and each on its own axis.
+query IRRR
+SELECT name, round(mlake_rms_db(clip), 3), round(mlake_peak_db(clip), 3),
+       round(mlake_zcr(clip), 4)
+FROM clips WHERE name = 'tone-4000.wav';
+----
+tone-4000.wav	-15.051	-12.041	0.5
+
+# The centroid finds the tone, to within the leakage a Hann window spreads into
+# the neighbouring bins.
+query II
+SELECT abs(mlake_centroid_hz(clip) - 1000) < 15,
+       abs((SELECT mlake_centroid_hz(clip) FROM clips WHERE name = 'tone-4000.wav') - 4000) < 15
+FROM clips WHERE name = 'tone-1000.wav';
+----
+true	true
+
+# ── two channels average to one ─────────────────────────────────────────────
+# Identical channels, so every feature must equal the mono clip's exactly.
+# Mixing that dropped a channel or forgot to divide would move the level by
+# 6 dB and nothing else would notice.
+query I
+SELECT (SELECT mlake_rms_db(clip) FROM clips WHERE name = 'stereo-1000.wav')
+     = (SELECT mlake_rms_db(clip) FROM clips WHERE name = 'tone-1000.wav');
+----
+true
+
+# ── silence, and the difference between a floor and a null ──────────────────
+query RRR
+SELECT mlake_rms_db(clip), mlake_peak_db(clip), mlake_centroid_hz(clip)
+FROM clips WHERE name = 'silence.wav';
+----
+-120.0	-120.0	NULL
+
+# ── a clip that will not decode is a NULL, not a failed query ───────────────
+query IIII
+SELECT count(*), count(mlake_rms_db(clip)), count(mlake_centroid_hz(clip)),
+       count(mlake_duration_s(clip))
+FROM clips;
+----
+6	5	4	5
+
+# A SQL NULL in is a NULL out, and never an error.
+query I
+SELECT mlake_rms_db(NULL::BLOB) IS NULL;
+----
+true
+
+# A string casts to BLOB on the way in, so this is reachable, and it is a
+# NULL for the same reason a truncated recording is: an undecodable clip has no
+# level, and saying so is more useful than failing the query around it.
+query I
+SELECT mlake_rms_db('not a wav') IS NULL;
+----
+true
+
+# ── the numbers compose, which is the whole point ───────────────────────────
+# A feature is an expression, so it works in a WHERE, in an ORDER BY, and
+# inside a window — none of which a value computed outside the database can do
+# without fetching every row first.
+query II
+SELECT name, round(mlake_rms_db(clip), 1) FROM clips
+WHERE mlake_rms_db(clip) > -12 AND mlake_duration_s(clip) >= 1.0
+ORDER BY mlake_centroid_hz(clip);
+----
+stereo-1000.wav	-9.0
+tone-1000.wav	-9.0
+
+# The shape the demo query is built on: a window over a column Mojo produced.
+query II
+SELECT name, round(mlake_rms_db(clip) - avg(mlake_rms_db(clip)) OVER (), 1) AS above_average
+FROM clips WHERE mlake_rms_db(clip) > -100 ORDER BY above_average DESC, name;
+----
+short.wav	1.5
+stereo-1000.wav	1.5
+tone-1000.wav	1.5
+tone-4000.wav	-4.5
+
+# ── the same kernel from the file side ──────────────────────────────────────
+query IIIII
+SELECT regexp_extract(path, '[^/]+$'), sample_rate, channels, frames, error
+FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav')
+ORDER BY path;
+----
+broken.wav	NULL	NULL	NULL	wav: not a RIFF/WAVE file
+short.wav	16000	1	320	NULL
+silence.wav	16000	1	8000	NULL
+stereo-1000.wav	16000	2	16000	NULL
+tone-1000.wav	16000	1	16000	NULL
+tone-4000.wav	16000	1	16000	NULL
+
+# Reading the file and reading the blob run the same kernel, so they must agree
+# to the last bit. Anything less means one of the two ways in is wrong.
+query I
+SELECT count(*) FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav') f
+JOIN clips c ON regexp_extract(f.path, '[^/]+$') = c.name
+WHERE f.rms_db IS NOT DISTINCT FROM mlake_rms_db(c.clip)
+  AND f.centroid_hz IS NOT DISTINCT FROM mlake_centroid_hz(c.clip)
+  AND f.zcr IS NOT DISTINCT FROM mlake_zcr(c.clip);
+----
+6
+
+# ── how the work divides cannot change the answer ───────────────────────────
+# batch_rows is a scheduling decision. Two clips per ticket makes three tickets
+# out of six files; one per ticket makes six. Same rows either way.
+query II
+SELECT count(*), round(sum(rms_db), 3)
+FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav', batch_rows => 2);
+----
+6	-162.145
+
+query I
+SELECT (SELECT count(*) FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav', batch_rows => 1))
+     = (SELECT count(*) FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav', batch_rows => 1000));
+----
+true
+
+statement error
+SELECT * FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav', batch_rows => -1);
+----
+batch_rows cannot be negative
+
+# ── what the pattern matches ────────────────────────────────────────────────
+# '*.wav' means '*.wav'. The directory holds an ignored.dat that a glob run
+# against the whole directory would pick up.
+query I
+SELECT count(*) FROM mlake_audio_features('${MLAKE_CLIPS}');
+----
+7
+
+# A single file is a pattern too, because it is what someone types.
+query II
+SELECT count(*), round(rms_db, 3) FROM mlake_audio_features('${MLAKE_CLIPS}/tone-1000.wav')
+GROUP BY rms_db;
+----
+1	-9.031
+
+statement error
+SELECT * FROM mlake_audio_features('/nonexistent/clips/*.wav');
+----
+no such directory
+
+statement error
+SELECT * FROM mlake_audio_features('/nonexistent/clip.wav');
+----
+no such file or directory
+
+# ── it behaves like any other table ─────────────────────────────────────────
+statement ok
+CREATE TABLE measured AS SELECT * FROM mlake_audio_features('${MLAKE_CLIPS}/*.wav');
+
+query II
+SELECT count(*), count(DISTINCT path) FROM measured JOIN clips
+  ON regexp_extract(measured.path, '[^/]+$') = clips.name;
+----
+6	6

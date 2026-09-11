@@ -73,6 +73,10 @@ MlakeBridge LoadBridge() {
 	Resolve(handle, "mlake_schema", bridge.schema);
 	Resolve(handle, "mlake_read_split", bridge.read_split);
 	Resolve(handle, "mlake_free", bridge.free_string);
+	Resolve(handle, "mlake_audio_batch", bridge.audio_batch);
+	Resolve(handle, "mlake_audio_plan", bridge.audio_plan);
+	Resolve(handle, "mlake_audio_schema", bridge.audio_schema);
+	Resolve(handle, "mlake_audio_read", bridge.audio_read);
 	// The handle is deliberately never dlclose'd: the function pointers above
 	// outlive any scope that could close it, and a DuckDB extension is
 	// unloaded only when the process ends.

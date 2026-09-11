@@ -12,7 +12,8 @@ include_directories(src/include)
 set(EXTENSION_SOURCES
     src/mlake_extension.cpp
     src/mlake_bridge.cpp
-    src/mlake_arrow_scan.cpp)
+    src/mlake_arrow_scan.cpp
+    src/mlake_audio.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

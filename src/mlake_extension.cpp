@@ -3,6 +3,10 @@
 //
 //     SELECT * FROM mlake_scan('warehouse/db/table');
 //
+// The audio functions, which run a Mojo kernel over data DuckDB already has
+// rather than fetching data DuckDB does not, are in mlake_audio.cpp. This file
+// registers them but knows nothing else about them.
+//
 // ## Why a table function and not Arrow IPC
 //
 // flight.mojo already serves these tables over Arrow Flight, and a DuckDB
@@ -36,6 +40,7 @@
 
 #include "mlake_extension.hpp"
 #include "mlake_arrow_scan.hpp"
+#include "mlake_audio.hpp"
 #include "mlake_bridge.hpp"
 
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -120,6 +125,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// splitter looking correct.
 	scan.named_parameters["split_size"] = LogicalType::BIGINT;
 	loader.RegisterFunction(scan);
+
+	RegisterAudioFunctions(loader);
 }
 
 void MlakeExtension::Load(ExtensionLoader &loader) {

@@ -25,6 +25,17 @@ struct ArrowArrayStream;
 
 namespace duckdb {
 
+//! Which feature `audio_batch` should compute. The same list, in the same
+//! order, as the `FEATURE_*` constants in mojo/src/bridge.mojo — an integer
+//! crosses the boundary, so the two lists agreeing is the whole contract.
+enum MlakeFeature : int64_t {
+	MLAKE_FEATURE_RMS_DB = 0,
+	MLAKE_FEATURE_PEAK_DB = 1,
+	MLAKE_FEATURE_CENTROID_HZ = 2,
+	MLAKE_FEATURE_ZCR = 3,
+	MLAKE_FEATURE_DURATION_S = 4,
+};
+
 //! Every entry point of mojo/src/bridge.mojo, resolved once at extension load.
 struct MlakeBridge {
 	int64_t (*plan)(const char *dir, int64_t dir_len, int64_t split_size, int64_t *err);
@@ -41,6 +52,23 @@ struct MlakeBridge {
 	int64_t (*read_split)(const char *dir, int64_t dir_len, const char *ticket, int64_t ticket_len, int64_t split_size,
 	                      int64_t *out, int64_t *err);
 	void (*free_string)(int64_t ptr);
+
+	//! One feature for each of `count` clips described in place by `ptrs` and
+	//! `lens`. Takes a whole DuckDB vector at a time because that is how
+	//! DuckDB evaluates a scalar function, and a per-row entry point would put
+	//! a language boundary in the inner loop of every query.
+	//!
+	//! Writes `out_values[i]` and `out_valid[i]`; a clip that will not decode
+	//! sets valid to 0 and is a SQL NULL, not an error. Only an unrecognised
+	//! `kind` fails the call.
+	int64_t (*audio_batch)(int64_t kind, const int64_t *ptrs, const int64_t *lens, int64_t count, double *out_values,
+	                       uint8_t *out_valid, int64_t *err);
+	//! Expand a file pattern into tickets of at most `batch_rows` clips. The
+	//! handle is read and freed with plan_count / plan_ticket / plan_free,
+	//! exactly like an Iceberg plan.
+	int64_t (*audio_plan)(const char *pattern, int64_t pattern_len, int64_t batch_rows, int64_t *err);
+	int64_t (*audio_schema)(int64_t *out, int64_t *err);
+	int64_t (*audio_read)(const char *ticket, int64_t ticket_len, int64_t *out, int64_t *err);
 
 	//! Load the bridge, or throw explaining where it was looked for. Loaded
 	//! once and cached: dlopen is idempotent but the error message is worth

@@ -1,7 +1,8 @@
 # duckdb.extension
 
-A DuckDB extension that reads Apache Iceberg tables through
-[magmalake](https://magmalake.org)'s Mojo read stack.
+A DuckDB extension that puts Mojo inside the database: reading Apache Iceberg
+tables through [magmalake](https://magmalake.org)'s Mojo read stack, and
+computing things SQL cannot express over the data it finds there.
 
 ```sql
 LOAD mlake;
@@ -63,14 +64,33 @@ Every ticket carries the snapshot it was planned against, and reading one
 re-plans at that snapshot rather than at whatever is current. A commit landing
 mid-query cannot change what the query returns.
 
+## Computing in Mojo, not just reading
+
+The seam works in the other direction too: a scalar function runs a Mojo kernel
+on the bytes of a DuckDB vector, in place. DuckDB evaluates a scalar function
+over a whole vector, so the bridge takes a whole vector — 2048 blobs described
+by address and length, one call — rather than putting a language boundary in
+the inner loop of every query.
+
+**[`examples/soundlake`](examples/soundlake)** is the worked example: five
+audio features over a `BLOB` column, a table function over a directory of
+recordings, and what both cost.
+
 ## Building
 
 Two halves, and the Makefile builds both.
 
 ```sh
 pixi run build     # the Mojo bridge, then the extension and a duckdb binary
-pixi run test      # generates an Iceberg fixture with PyIceberg, then runs SQL
+pixi run test      # generates the fixtures, then runs the SQL tests
 ./build/release/duckdb -c "SELECT * FROM mlake_scan('…') LIMIT 5"
+cd examples/soundlake && ./run.sh bench
+```
+
+The Mojo kernels have their own tests, which need neither DuckDB nor a fixture:
+
+```sh
+pixi run --manifest-path mojo/pixi.toml mojo run -I src tests/dsp_test.mojo
 ```
 
 The C++ half is a normal DuckDB out-of-tree extension: `duckdb/` and

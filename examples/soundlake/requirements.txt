@@ -1,0 +1,5 @@
+# duckdb is pinned to the version in the duckdb/ submodule: an extension built
+# against one version's internals will not load into another.
+duckdb==1.4.1
+numpy>=1.26
+pyarrow>=21
