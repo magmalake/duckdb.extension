@@ -33,7 +33,7 @@ jobs:
       - name: Check out the Mojo read stack
         run: |
           cd ..
-          for repo in iceberg.mojo parquet.mojo arrow-mlake.mojo memory-region.mojo avro.mojo \
+          for repo in iceberg.mojo parquet.mojo arrow-mlake.mojo memory-region.mojo avro.mojo deflate.mojo \
                       thrift.mojo zstd.mojo snappy.mojo lz4.mojo brotli.mojo \
                       hashes.mojo roaring.mojo objectstore.mojo threads.mojo; do
             git clone --quiet --depth 1 https://github.com/magmalake/$repo.git
