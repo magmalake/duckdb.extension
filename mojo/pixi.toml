@@ -1,13 +1,13 @@
 [workspace]
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
-channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+channels = ["https://conda.modular.com/max", "conda-forge"]
 name = "mlake-bridge"
 version = "0.1.0"
 description = "The C ABI the DuckDB extension calls into: Iceberg scan planning and Arrow, in Mojo"
 platforms = ["osx-arm64", "linux-64"]
 
 [dependencies]
-mojo = ">=1.1.0,<1.2.0a0"
+mojo = "==1.2.0"
 
 # The include list is the read stack: iceberg needs avro and parquet (and its
 # `full/` codecs), parquet needs arrow, deflate, thrift and the codecs, arrow
