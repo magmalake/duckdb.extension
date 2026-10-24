@@ -120,7 +120,7 @@ and a `--recursive` clone is deterministic either way. What the rule above
 fixes is *which* line it is deterministic about.
 
 The Mojo half lives in `mojo/` with its own `pixi.toml`, because it needs the
-`max-nightly` channel and a compiler pin this build has no reason to inherit.
+Mojo channel and a compiler pin this build has no reason to inherit.
 It builds `libmlake_bridge`, which the extension **dlopens** rather than links:
 a `.duckdb_extension` built here still loads on a machine where the bridge
 lives elsewhere. `MLAKE_BRIDGE` overrides the path baked in at build time.

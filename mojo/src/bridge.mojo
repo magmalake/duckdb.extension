@@ -327,7 +327,7 @@ def mlake_read_split(
             _open(table_dir)
             .use_snapshot(decoded[0])
             .with_split_size(_split_size(split_size))
-            .to_batches_for_splits(paths^, starts^, ScanOptions())
+            .to_batches_for_splits(paths, starts, ScanOptions())
         )
 
         var exported = List[ExportedArray]()
@@ -539,7 +539,7 @@ def mlake_audio_read(
                     paths.append(String(unsafe_from_utf8=bytes[start:i]))
                 start = i + 1
 
-        var built = features_batch(paths^)
+        var built = features_batch(paths)
         var exported = List[ExportedArray]()
         exported.append(export_c(built[0], built[1]))
         _move_into(export_stream_of(exported^), out_ptr, 5, True)  # five words

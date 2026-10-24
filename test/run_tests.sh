@@ -13,8 +13,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VENV="${TMPDIR:-/tmp}/duckdb-extension-venv"
-uv venv --quiet --allow-existing "$VENV" 2>/dev/null || uv venv --quiet "$VENV"
+# Pin the interpreter: left to itself uv takes the newest Python on the
+# machine, and a release newer than pyarrow's wheels means a source build of
+# Arrow, which fails.
+VENV="${TMPDIR:-/tmp}/duckdb-extension-venv-py313"
+uv venv --quiet --python 3.13 --allow-existing "$VENV" 2>/dev/null || uv venv --quiet --python 3.13 "$VENV"
 VIRTUAL_ENV="$VENV" uv pip install --quiet 'pyarrow>=21,<26' 'pyiceberg[sql-sqlite]>=0.8,<1'
 
 MLAKE_FIXTURE="$("$VENV/bin/python" test/make_fixture.py test/fixtures)"
