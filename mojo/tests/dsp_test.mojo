@@ -148,7 +148,7 @@ def test_wav_rejects_what_it_cannot_read() raises:
         _ = clip^
     except e:
         raised = True
-        assert_true(String(e).find("RIFF") >= 0)
+        assert_true("RIFF" in String(e))
     _ = junk^
     assert_true(raised, "a buffer of zeros is not a WAVE file")
 
