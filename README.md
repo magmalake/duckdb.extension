@@ -1,5 +1,7 @@
 # duckdb.extension
 
+[![Mojo version](https://mojourney.dev/badge/magmalake/duckdb.extension/mojo.svg)](https://mojourney.dev/repos/magmalake/duckdb.extension)
+
 A DuckDB extension that puts Mojo inside the database: reading Apache Iceberg
 tables through [magmalake](https://magmalake.org)'s Mojo read stack, and
 computing things SQL cannot express over the data it finds there.
